@@ -30,7 +30,7 @@ function groupByRisk(analysis) {
 
 function formatRiskSection(risk, items, options) {
   const color = risk === 'HIGH' ? chalk.red : risk === 'MEDIUM' ? chalk.yellow : chalk.green;
-  let output = color.bold(`[${risk}]\n`);
+  let output = color.bold(`Risk [${risk}]\n`);
   
   items.forEach(item => {
     output += color(`\n${item.file}`) + chalk.gray(` (${item.type})\n`);
