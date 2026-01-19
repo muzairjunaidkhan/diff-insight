@@ -1,6 +1,8 @@
 // src/changeAnalyzer.js - Updated with AST support
 const { parseJSWithAST } = require('./parser/astJsParser');
 const { parseReactWithAST } = require('./parser/astReactParser');
+// const { parseJS } = require('./parser/jsParser');
+// const { parseReact } = require('./parser/reactParser');
 const { parseHTML } = require('./parser/htmlParser');
 const { parseCSS } = require('./parser/cssParser');
 const { parseJQuery } = require('./parser/jqueryParser');
