@@ -5,6 +5,21 @@ Multi-language git diff analyzer that provides human-readable summaries of meani
 
 ## Installation
 
+For Other Developers (Users):
+
+Option 1 - Global Install (Best for CLI)
+bash
+npm install -g diff-insight
+diff-insight main
+
+Option 2 - Use Without Installing
+bash
+npx diff-insight main
+
+Option 3 - Project Dependency
+bash
+npm install --save-dev diff-insight
+
 ```bash
 npm install
 npm link  # For global CLI access
