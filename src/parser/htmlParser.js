@@ -1,7 +1,7 @@
 // src/parser/htmlParser.js
 const { parse } = require('node-html-parser');
 
-// function parseHTML(diff, filepath) {
+function parseHTML(diff, filepath) {
 //   const changes = [];
 //   const lines = diff.split('\n');
   
@@ -48,7 +48,7 @@ const { parse } = require('node-html-parser');
 //   });
   
 //   return changes.length > 0 ? changes : ['HTML structure modified'];
-// }
+}
 
 function extractTags(html) {
   const tags = [];
