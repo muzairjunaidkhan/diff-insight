@@ -24,16 +24,16 @@
     "css",
     "developer-tools"
   ],
-  "author": "Your Name <your.email@example.com>",
+  "author": "Uzair Junaid Khan <uzairjunaidkhan0@gmail.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/diff-insight.git"
+    "url": "https://github.com/muzairjunaidkhan/diff-insight"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/diff-insight/issues"
+    "url": "https://github.com/muzairjunaidkhan/diff-insight/issues"
   },
-  "homepage": "https://github.com/yourusername/diff-insight#readme",
+  "homepage": "https://github.com/muzairjunaidkhan/diff-insight#readme",
   "engines": {
     "node": ">=14.0.0"
   },

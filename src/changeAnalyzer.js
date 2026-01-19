@@ -10,9 +10,54 @@ async function analyzeChanges(diffs, options) {
   const results = [];
   
   for (const diff of diffs) {
+    // Handle added files
+    if (diff.status === 'added') {
+      results.push({
+        file: diff.path,
+        status: 'added',
+        type: detectFileType(diff.path, diff.diff),
+        changes: ['File added'],
+        risk: options.risk ? 'LOW' : null,
+        insertions: diff.insertions,
+        deletions: diff.deletions
+      });
+      continue;
+    }
+    
+    // Handle deleted files
+    if (diff.status === 'deleted') {
+      results.push({
+        file: diff.path,
+        status: 'deleted',
+        type: detectFileType(diff.path, diff.diff),
+        changes: ['File deleted'],
+        risk: options.risk ? assessRisk(diff.path, ['File deleted']) : null,
+        insertions: diff.insertions,
+        deletions: diff.deletions
+      });
+      continue;
+    }
+    
+    // Handle renamed files
+    if (diff.status === 'renamed') {
+      results.push({
+        file: diff.newPath,
+        oldFile: diff.oldPath,
+        status: 'renamed',
+        type: detectFileType(diff.newPath, diff.diff),
+        changes: [`File renamed from: ${diff.oldPath}`],
+        risk: options.risk ? 'LOW' : null,
+        insertions: diff.insertions,
+        deletions: diff.deletions
+      });
+      continue;
+    }
+    
+    // Handle binary files
     if (diff.binary) {
       results.push({
         file: diff.path,
+        status: 'modified',
         type: 'binary',
         changes: ['Binary file changed'],
         risk: 'LOW'
@@ -20,6 +65,7 @@ async function analyzeChanges(diffs, options) {
       continue;
     }
     
+    // Handle modified files
     const fileType = detectFileType(diff.path, diff.diff);
     let changes = [];
     
@@ -49,6 +95,7 @@ async function analyzeChanges(diffs, options) {
     
     results.push({
       file: diff.path,
+      status: 'modified',
       type: fileType,
       changes,
       risk,
