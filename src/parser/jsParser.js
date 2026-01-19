@@ -1,5 +1,5 @@
 // src/parser/jsParser.js
-// const acorn = require('acorn');
+const acorn = require('acorn');
 
 function parseJS(diff, filepath) {
   const changes = [];
