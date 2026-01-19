@@ -1,0 +1,56 @@
+{
+  "name": "diff-insight",
+  "version": "1.0.0",
+  "description": "Multi-language git diff analyzer with human-readable summaries",
+  "main": "src/index.js",
+  "bin": {
+    "diff-insight": "./bin/diff-insight.js"
+  },
+  "scripts": {
+    "start": "node bin/diff-insight.js",
+    "test": "echo \"No tests yet\"",
+    "prepublishOnly": "echo 'Ready to publish'"
+  },
+  "keywords": [
+    "git",
+    "diff",
+    "analyzer",
+    "cli",
+    "code-review",
+    "javascript",
+    "typescript",
+    "react",
+    "html",
+    "css",
+    "developer-tools"
+  ],
+  "author": "Your Name <your.email@example.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/diff-insight.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/diff-insight/issues"
+  },
+  "homepage": "https://github.com/yourusername/diff-insight#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "simple-git": "^3.22.0",
+    "commander": "^11.1.0",
+    "chalk": "^4.1.2",
+    "acorn": "^8.11.3",
+    "@babel/parser": "^7.23.9",
+    "node-html-parser": "^6.1.12",
+    "postcss": "^8.4.33",
+    "postcss-scss": "^4.0.9"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ]
+}
