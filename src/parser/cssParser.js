@@ -1,111 +1,146 @@
-// src/parser/cssParser.js - PostCSS AST with regex fallback
+// src/parser/cssParser.js - Full-file AST with improvements
 
 const postcss = require('postcss');
 const postcssScss = require('postcss-scss');
 const postcssNested = require('postcss-nested');
 
 /**
- * Main CSS parser with AST-first approach
+ * Main CSS parser with full-file AST approach
+ * Primary: Parse complete old/new files and compare ASTs
+ * Fallback: Diff-aware regex when AST fails
  */
-async function parseCSS(diff, filepath) {
+async function parseCSS(diff, filepath, targetBranch = 'main') {
+  // OPTIMIZATION 1: Skip unchanged files
+  if (!diff || (diff.status && diff.status !== 'modified')) {
+    console.log(`[CSS-AST] Skipping unchanged file: ${filepath}`);
+    return [];
+  }
+  
+  // Handle diff object vs diff string
+  const diffContent = typeof diff === 'string' ? diff : diff.diff;
+  
+  if (!diffContent) {
+    console.log(`[CSS-AST] No diff content for: ${filepath}`);
+    return [];
+  }
+  
   try {
-    console.log(`[CSS-AST] Parsing ${filepath} with PostCSS...`);
+    console.log(`[CSS-AST] Full-file parsing ${filepath}...`);
     
-    const changes = await parseCSSWithAST(diff, filepath);
+    // Try full-file AST approach first
+    const changes = await parseCSSWithFullFileAST(diffContent, filepath, targetBranch, diff);
     
     if (changes.length > 0) {
-      console.log(`[CSS-AST] ✓ Success: ${filepath}`);
+      console.log(`[CSS-AST] ✓ Success: ${filepath} (${changes.length} changes)`);
       return changes;
     }
     
-    throw new Error('No changes detected by AST');
+    throw new Error('No changes detected by full-file AST');
     
   } catch (astError) {
     console.warn(`[CSS-AST] ✗ Failed: ${filepath} - ${astError.message}`);
-    console.log(`[CSS-FALLBACK] Trying regex parser for ${filepath}...`);
+    console.log(`[CSS-FALLBACK] Using diff-aware fallback for ${filepath}...`);
     
     try {
-      const changes = parseCSSWithRegex(diff, filepath);
+      const changes = parseCSSWithDiffFallback(diffContent, filepath);
       console.log(`[CSS-FALLBACK] ✓ Success: ${filepath}`);
       return changes;
-    } catch (regexError) {
+    } catch (fallbackError) {
       console.warn(`[CSS-FALLBACK] ✗ Failed: ${filepath}`);
-      return ['Style rules updated'];
+      return ['Component visual changes detected'];
     }
   }
 }
 
 /**
- * PostCSS AST-based parser
+ * PRIMARY METHOD: Full-file AST parsing
+ * Fetches complete old and new file content, parses both, compares ASTs
  */
-async function parseCSSWithAST(diff, filepath) {
+async function parseCSSWithFullFileAST(diffContent, filepath, targetBranch, diffObj) {
   const changes = [];
-  const lines = diff.split('\n');
   
-  // Extract added and removed content
-  let addedLines = [];
-  let removedLines = [];
+  // Extract full file contents from the repository
+  const { oldContent, newContent } = await extractFullFileContents(filepath, targetBranch, diffContent);
   
-  for (const line of lines) {
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      addedLines.push(line.substring(1));
-    } else if (line.startsWith('-') && !line.startsWith('---')) {
-      removedLines.push(line.substring(1));
-    }
-  }
+  // OPTIMIZATION 3: Explicit SCSS/CSS syntax detection
+  const isSCSS = /\.(scss|sass)$/.test(filepath);
+  const syntax = isSCSS ? postcssScss : undefined;
+  const plugins = isSCSS ? [postcssNested] : [];
   
-  const addedContent = addedLines.join('\n');
-  const removedContent = removedLines.join('\n');
-  
-  // Determine syntax (CSS, SCSS, SASS)
-  const syntax = filepath.match(/\.(scss|sass)$/) ? postcssScss : null;
-  
-  // Parse both added and removed content
-  let addedAST, removedAST;
+  // Parse both versions completely
+  let oldAST = null;
+  let newAST = null;
   
   try {
-    if (addedContent.trim()) {
-      addedAST = postcss([postcssNested]).process(addedContent, { 
+    if (oldContent && oldContent.trim()) {
+      const result = await postcss(plugins).process(oldContent, { 
         syntax,
-        from: filepath 
-      }).root;
+        from: filepath,
+        parser: syntax
+      });
+      oldAST = result.root;
     }
   } catch (e) {
-    console.warn(`[CSS-AST] Warning: Could not parse added content`);
+    console.warn(`[CSS-AST] Warning: Could not parse old file - ${e.message}`);
+    // Try without nested plugin
+    if (oldContent && oldContent.trim() && isSCSS) {
+      try {
+        const result = await postcss().process(oldContent, { 
+          syntax,
+          from: filepath 
+        });
+        oldAST = result.root;
+      } catch (e2) {
+        console.warn(`[CSS-AST] Warning: Fallback parse also failed`);
+      }
+    }
   }
   
   try {
-    if (removedContent.trim()) {
-      removedAST = postcss([postcssNested]).process(removedContent, { 
+    if (newContent && newContent.trim()) {
+      const result = await postcss(plugins).process(newContent, { 
         syntax,
-        from: filepath 
-      }).root;
+        from: filepath,
+        parser: syntax
+      });
+      newAST = result.root;
     }
   } catch (e) {
-    console.warn(`[CSS-AST] Warning: Could not parse removed content`);
+    console.warn(`[CSS-AST] Warning: Could not parse new file - ${e.message}`);
+    // Try without nested plugin
+    if (newContent && newContent.trim() && isSCSS) {
+      try {
+        const result = await postcss().process(newContent, { 
+          syntax,
+          from: filepath 
+        });
+        newAST = result.root;
+      } catch (e2) {
+        console.warn(`[CSS-AST] Warning: Fallback parse also failed`);
+      }
+    }
   }
   
-  // 1. Analyze selectors
-  if (addedAST) {
-    const selectorChanges = analyzeSelectorChanges(addedAST, removedAST);
-    changes.push(...selectorChanges);
+  // Compare ASTs
+  if (!oldAST && !newAST) {
+    throw new Error('Could not parse either version of the file');
   }
   
-  // 2. Analyze declarations
-  if (addedAST) {
-    const declarationChanges = analyzeDeclarationChanges(addedAST, removedAST);
-    changes.push(...declarationChanges);
-  }
+  // 1. Compare selectors
+  const selectorChanges = compareSelectors(oldAST, newAST);
+  changes.push(...selectorChanges);
   
-  // 3. Analyze at-rules (media queries, keyframes, etc.)
-  if (addedAST) {
-    const atRuleChanges = analyzeAtRules(addedAST, removedAST);
-    changes.push(...atRuleChanges);
-  }
+  // 2. Compare declarations (properties)
+  const declarationChanges = compareDeclarations(oldAST, newAST);
+  changes.push(...declarationChanges);
   
-  // 4. Analyze SCSS/SASS features
-  if (filepath.match(/\.(scss|sass)$/)) {
-    const preprocessorChanges = analyzePreprocessorFeatures(addedContent, removedContent);
+  // 3. Compare at-rules (media queries, keyframes, etc.)
+  const atRuleChanges = compareAtRules(oldAST, newAST);
+  changes.push(...atRuleChanges);
+  
+  // 4. Compare SCSS/SASS features if applicable
+  if (isSCSS) {
+    const preprocessorChanges = comparePreprocessorFeatures(oldContent || '', newContent || '');
     changes.push(...preprocessorChanges);
   }
   
@@ -113,85 +148,127 @@ async function parseCSSWithAST(diff, filepath) {
 }
 
 /**
- * Analyze selector changes using AST
+ * Extract full file contents from git repository
+ * This uses git commands to get the complete old and new versions
  */
-function analyzeSelectorChanges(addedAST, removedAST) {
+async function extractFullFileContents(filepath, targetBranch, diffContent) {
+  const { execSync } = require('child_process');
+  
+  let oldContent = '';
+  let newContent = '';
+  
+  try {
+    // Get old file content from target branch
+    try {
+      oldContent = execSync(`git show ${targetBranch}:${filepath}`, { 
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore']
+      });
+    } catch (e) {
+      // File might be new, doesn't exist in old branch
+      console.log(`[CSS-AST] File is new or doesn't exist in ${targetBranch}`);
+    }
+    
+    // Get new file content from current working tree
+    try {
+      const fs = require('fs');
+      
+      if (fs.existsSync(filepath)) {
+        newContent = fs.readFileSync(filepath, 'utf8');
+      } else {
+        // File might be deleted
+        console.log(`[CSS-AST] File deleted from working tree`);
+      }
+    } catch (e) {
+      console.warn(`[CSS-AST] Could not read new file: ${e.message}`);
+    }
+    
+  } catch (e) {
+    console.warn(`[CSS-AST] Error extracting file contents: ${e.message}`);
+    // OPTIMIZATION 2: Fall back to reconstructing from diff
+    return reconstructFromDiff(diffContent);
+  }
+  
+  return { oldContent, newContent };
+}
+
+/**
+ * OPTIMIZATION 2: Improved diff reconstruction
+ * Handles both string diffs and structured diff objects
+ */
+function reconstructFromDiff(diff) {
+  // Handle different diff formats
+  let diffText = '';
+  
+  if (typeof diff === 'string') {
+    diffText = diff;
+  } else if (diff && diff.diff) {
+    diffText = diff.diff;
+  } else if (diff && Array.isArray(diff.hunks)) {
+    // Handle structured git diff with hunks
+    diffText = diff.hunks.map(hunk => hunk.lines.join('\n')).join('\n');
+  } else {
+    console.warn('[CSS-AST] Unknown diff format, cannot reconstruct');
+    return { oldContent: '', newContent: '' };
+  }
+  
+  const lines = diffText.split('\n');
+  let oldLines = [];
+  let newLines = [];
+  
+  for (const line of lines) {
+    if (line.startsWith('@@')) continue;
+    if (line.startsWith('+++')) continue;
+    if (line.startsWith('---')) continue;
+    
+    if (line.startsWith('+')) {
+      newLines.push(line.substring(1));
+    } else if (line.startsWith('-')) {
+      oldLines.push(line.substring(1));
+    } else {
+      // Context line - appears in both
+      const contextLine = line.startsWith(' ') ? line.substring(1) : line;
+      oldLines.push(contextLine);
+      newLines.push(contextLine);
+    }
+  }
+  
+  return {
+    oldContent: oldLines.join('\n'),
+    newContent: newLines.join('\n')
+  };
+}
+
+/**
+ * Compare selectors between old and new ASTs
+ */
+function compareSelectors(oldAST, newAST) {
   const changes = [];
   
-  const addedSelectors = extractSelectorsFromAST(addedAST);
-  const removedSelectors = removedAST ? extractSelectorsFromAST(removedAST) : [];
+  const oldSelectors = oldAST ? extractSelectors(oldAST) : [];
+  const newSelectors = newAST ? extractSelectors(newAST) : [];
   
-  // Find new selectors
-  const newSelectors = addedSelectors.filter(s => !removedSelectors.includes(s));
-  const deletedSelectors = removedSelectors.filter(s => !addedSelectors.includes(s));
+  // Find added and removed selectors
+  const addedSelectors = newSelectors.filter(s => !oldSelectors.includes(s));
+  const removedSelectors = oldSelectors.filter(s => !newSelectors.includes(s));
   
-  // Categorize selectors
-  const categorized = categorizeSelectors(newSelectors);
-  
-  // ID selectors
-  if (categorized.ids.length > 0) {
-    changes.push(`Added ID selector${categorized.ids.length > 1 ? 's' : ''}: ${categorized.ids.slice(0, 3).join(', ')}${categorized.ids.length > 3 ? '...' : ''}`);
-  }
-  
-  // Class selectors
-  if (categorized.classes.length > 0) {
-    if (categorized.classes.length <= 5) {
-      categorized.classes.forEach(cls => changes.push(`Added class selector: ${cls}`));
+  addedSelectors.forEach(selector => {
+    const count = newSelectors.filter(s => s === selector).length;
+    if (count > 1) {
+      changes.push(`Property added: selector ${selector} (${count} instances)`);
     } else {
-      changes.push(`Added ${categorized.classes.length} class selectors: ${categorized.classes.slice(0, 3).join(', ')}...`);
+      changes.push(`Property added: selector ${selector}`);
     }
-  }
+  });
   
-  // Attribute selectors
-  if (categorized.attributes.length > 0) {
-    changes.push(`Added ${categorized.attributes.length} attribute selector${categorized.attributes.length > 1 ? 's' : ''}`);
-    if (categorized.attributes.length <= 3) {
-      categorized.attributes.forEach(sel => changes.push(`  └─ ${sel}`));
-    }
-  }
-  
-  // Element selectors
-  if (categorized.elements.length > 0 && categorized.elements.length <= 5) {
-    categorized.elements.forEach(elem => changes.push(`Added element selector: ${elem}`));
-  }
-  
-  // Complex selectors (with combinators)
-  if (categorized.complex.length > 0) {
-    changes.push(`Added ${categorized.complex.length} complex selector${categorized.complex.length > 1 ? 's' : ''}`);
-    if (categorized.complex.length <= 3) {
-      categorized.complex.forEach(sel => changes.push(`  └─ ${sel}`));
-    }
-  }
-  
-  // Pseudo-class selectors
-  if (categorized.pseudo.length > 0) {
-    const pseudoTypes = {};
-    categorized.pseudo.forEach(sel => {
-      const match = sel.match(/:([\w-]+)/);
-      if (match) {
-        const pseudo = `:${match[1]}`;
-        pseudoTypes[pseudo] = (pseudoTypes[pseudo] || 0) + 1;
-      }
-    });
-    
-    Object.entries(pseudoTypes).forEach(([pseudo, count]) => {
-      changes.push(`Added ${count} ${pseudo} state${count > 1 ? 's' : ''}`);
-    });
-  }
-  
-  // Nested/descendant selectors (SCSS)
-  if (categorized.nested.length > 0) {
-    changes.push(`Added ${categorized.nested.length} nested selector${categorized.nested.length > 1 ? 's' : ''}`);
-  }
-  
-  // Deleted selectors
-  if (deletedSelectors.length > 0) {
-    if (deletedSelectors.length <= 3) {
-      deletedSelectors.forEach(sel => changes.push(`Removed selector: ${sel}`));
+  removedSelectors.forEach(selector => {
+    const count = oldSelectors.filter(s => s === selector).length;
+    if (count > 1) {
+      changes.push(`Property removed: selector ${selector} (${count} instances)`);
     } else {
-      changes.push(`Removed ${deletedSelectors.length} selectors`);
+      changes.push(`Property removed: selector ${selector}`);
     }
-  }
+  });
   
   return changes;
 }
@@ -199,7 +276,7 @@ function analyzeSelectorChanges(addedAST, removedAST) {
 /**
  * Extract all selectors from AST
  */
-function extractSelectorsFromAST(ast) {
+function extractSelectors(ast) {
   const selectors = [];
   
   ast.walkRules(rule => {
@@ -212,178 +289,116 @@ function extractSelectorsFromAST(ast) {
 }
 
 /**
- * Categorize selectors by type
+ * Compare declarations (CSS properties) between ASTs
  */
-function categorizeSelectors(selectors) {
-  return {
-    ids: selectors.filter(s => /^#[\w-]+$/.test(s)),
-    classes: selectors.filter(s => /^\.[\w-]+$/.test(s)),
-    elements: selectors.filter(s => /^[a-z]+$/i.test(s) && !s.includes(':')),
-    attributes: selectors.filter(s => /\[[\w-]+/.test(s)),
-    complex: selectors.filter(s => /[\s>+~]/.test(s) && !s.includes(':')),
-    pseudo: selectors.filter(s => /:(?!:)/.test(s)), // Single colon pseudo-classes
-    nested: selectors.filter(s => s.includes('&'))
-  };
-}
-
-/**
- * Analyze declaration (property) changes
- */
-// function analyzeDeclarationChanges(addedAST, removedAST) {
-//   const changes = [];
-  
-//   const addedProps = extractDeclarationsFromAST(addedAST);
-//   const removedProps = removedAST ? extractDeclarationsFromAST(removedAST) : {};
-  
-//   // Display changes
-//   if (addedProps.display) {
-//     const values = Array.from(new Set(addedProps.display));
-//     if (values.includes('flex')) {
-//       changes.push(`Implemented Flexbox layout`);
-//       analyzeFlexboxProperties(addedAST, changes);
-//     }
-//     if (values.includes('grid')) {
-//       changes.push(`Implemented CSS Grid layout`);
-//       analyzeGridProperties(addedAST, changes);
-//     }
-//     if (values.includes('none')) {
-//       changes.push('⚠ Element hidden via display: none');
-//     }
-//   }
-  
-//   // Position changes
-//   if (addedProps.position) {
-//     const positions = Array.from(new Set(addedProps.position));
-//     positions.forEach(pos => {
-//       if (['absolute', 'fixed', 'sticky'].includes(pos)) {
-//         const count = addedProps.position.filter(p => p === pos).length;
-//         changes.push(`Set ${count} element${count > 1 ? 's' : ''} to position: ${pos}`);
-//       }
-//     });
-//   }
-  
-//   // Color changes
-//   const colorProps = ['color', 'background-color', 'border-color', 'fill', 'stroke'];
-//   const colorChanges = [];
-//   colorProps.forEach(prop => {
-//     if (addedProps[prop]) {
-//       colorChanges.push(...addedProps[prop]);
-//     }
-//   });
-  
-//   if (colorChanges.length > 0) {
-//     const uniqueColors = Array.from(new Set(colorChanges));
-//     if (uniqueColors.length <= 5) {
-//       changes.push(`Added colors: ${uniqueColors.join(', ')}`);
-//     } else {
-//       changes.push(`Added ${uniqueColors.length} new colors`);
-//     }
-//   }
-  
-//   // Animation changes
-//   analyzeAnimations(addedAST, changes);
-  
-//   // Typography changes
-//   analyzeTypography(addedAST, changes);
-  
-//   // Z-index changes
-//   if (addedProps['z-index']) {
-//     const zIndexes = Array.from(new Set(addedProps['z-index']));
-//     changes.push(`Set z-index: ${zIndexes.join(', ')}`);
-//   }
-  
-//   // Opacity/visibility
-//   if (addedProps.opacity) {
-//     const lowOpacity = addedProps.opacity.filter(o => parseFloat(o) < 0.5);
-//     if (lowOpacity.length > 0) {
-//       changes.push(`Set ${lowOpacity.length} element${lowOpacity.length > 1 ? 's' : ''} to semi-transparent`);
-//     }
-//   }
-  
-//   if (addedProps.visibility) {
-//     const hidden = addedProps.visibility.filter(v => v === 'hidden');
-//     if (hidden.length > 0) {
-//       changes.push(`⚠ ${hidden.length} element${hidden.length > 1 ? 's' : ''} hidden via visibility`);
-//     }
-//   }
-  
-//   return changes;
-// }
-
-function analyzeDeclarationChanges(addedAST, removedAST) {
+function compareDeclarations(oldAST, newAST) {
   const changes = [];
-
-  const addedProps = extractDeclarationsFromAST(addedAST);
-  const removedProps = removedAST ? extractDeclarationsFromAST(removedAST) : {};
-
-  const toArray = (val) => (Array.isArray(val) ? val : val ? [val] : []);
-
-  const allProps = new Set([...Object.keys(addedProps), ...Object.keys(removedProps)]);
-
+  
+  const oldProps = oldAST ? extractDeclarations(oldAST) : {};
+  const newProps = newAST ? extractDeclarations(newAST) : {};
+  
+  const allProps = new Set([...Object.keys(oldProps), ...Object.keys(newProps)]);
+  
   allProps.forEach(prop => {
-    const addedVals = Array.from(new Set(toArray(addedProps[prop])));
-    const removedVals = Array.from(new Set(toArray(removedProps[prop])));
-
-    // New values
-    addedVals.forEach(value => {
-      if (!removedVals.includes(value)) {
-        switch (prop) {
-          case 'display':
-            if (value === 'flex') {
-              changes.push('Implemented Flexbox layout');
-              analyzeFlexboxProperties(addedAST, changes);
-            } else if (value === 'grid') {
-              changes.push('Implemented CSS Grid layout');
-              analyzeGridProperties(addedAST, changes);
-            } else if (value === 'none') {
-              changes.push('⚠ Element hidden via display: none');
-            }
-            break;
-          case 'position':
-            if (['absolute', 'fixed', 'sticky'].includes(value)) {
-              const count = addedVals.filter(v => v === value).length;
-              changes.push(`Set ${count} element${count>1?'s':''} to position: ${value}`);
-            }
-            break;
-          case 'opacity':
-            if (parseFloat(value) < 0.5) {
-              changes.push(`Set ${addedVals.filter(v => parseFloat(v) < 0.5).length} element${addedVals.filter(v => parseFloat(v) < 0.5).length > 1 ? 's':''} to semi-transparent`);
-            }
-            break;
-          case 'visibility':
-            if (value === 'hidden') {
-              changes.push(`⚠ ${addedVals.filter(v => v==='hidden').length} element${addedVals.filter(v => v==='hidden').length > 1?'s':''} hidden via visibility`);
-            }
-            break;
-          case 'z-index':
-            changes.push(`Set z-index: ${addedVals.join(', ')}`);
-            break;
-          default:
-            changes.push(`Property added/changed: ${prop}: ${value}`);
+    const oldVals = (oldProps[prop] || []).map(v => normalizeValue(v, prop));
+    const newVals = (newProps[prop] || []).map(v => normalizeValue(v, prop));
+    
+    const oldUnique = Array.from(new Set(oldVals));
+    const newUnique = Array.from(new Set(newVals));
+    
+    // Count occurrences
+    const oldCounts = {};
+    const newCounts = {};
+    oldVals.forEach(v => oldCounts[v] = (oldCounts[v] || 0) + 1);
+    newVals.forEach(v => newCounts[v] = (newCounts[v] || 0) + 1);
+    
+    // Special handling for high-impact properties
+    if (prop === 'display') {
+      handleDisplayChanges(newUnique, oldUnique, newCounts, newAST, changes);
+      return;
+    }
+    
+    if (['position', 'visibility', 'opacity', 'z-index'].includes(prop)) {
+      handleSpecialProperty(prop, newUnique, oldUnique, newCounts, oldCounts, changes);
+      return;
+    }
+    
+    // OPTIMIZATION 6: Improved declaration comparison logic
+    const addedValues = newUnique.filter(v => !oldUnique.includes(v));
+    const removedValues = oldUnique.filter(v => !newUnique.includes(v));
+    
+    // Case 1: Simple 1-to-1 value change (old has 1 unique, new has 1 unique, they differ)
+    if (oldUnique.length === 1 && newUnique.length === 1 && oldUnique[0] !== newUnique[0]) {
+      const totalCount = Math.max(oldVals.length, newVals.length);
+      if (totalCount > 1) {
+        changes.push(`Property changed: ${prop} from ${oldUnique[0]} → ${newUnique[0]} (${totalCount} elements)`);
+      } else {
+        changes.push(`Property changed: ${prop} from ${oldUnique[0]} → ${newUnique[0]}`);
+      }
+      return; // Don't report added/removed for simple changes
+    }
+    
+    // Case 2: Property added to new elements (no old values)
+    if (oldUnique.length === 0 && newUnique.length > 0) {
+      newUnique.forEach(value => {
+        const count = newCounts[value];
+        if (count > 1) {
+          changes.push(`Property added: ${prop}: ${value} (${count} elements)`);
+        } else {
+          changes.push(`Property added: ${prop}: ${value}`);
         }
+      });
+      return;
+    }
+    
+    // Case 3: Property removed from old elements (no new values)
+    if (newUnique.length === 0 && oldUnique.length > 0) {
+      oldUnique.forEach(value => {
+        const count = oldCounts[value];
+        if (count > 1) {
+          changes.push(`Property removed: ${prop}: ${value} (${count} elements)`);
+        } else {
+          changes.push(`Property removed: ${prop}: ${value}`);
+        }
+      });
+      return;
+    }
+    
+    // Case 4: Complex changes (multiple values added/removed/changed)
+    // Only report actual additions and removals, not changes
+    addedValues.forEach(value => {
+      const count = newCounts[value];
+      if (count > 1) {
+        changes.push(`Property added: ${prop}: ${value} (${count} elements)`);
+      } else {
+        changes.push(`Property added: ${prop}: ${value}`);
       }
     });
-
-    // Removed values (optional, if you want to track removals)
-    removedVals.forEach(value => {
-      if (!addedVals.includes(value)) {
-        changes.push(`Removed ${prop}: ${value}`);
+    
+    removedValues.forEach(value => {
+      const count = oldCounts[value];
+      if (count > 1) {
+        changes.push(`Property removed: ${prop}: ${value} (${count} elements)`);
+      } else {
+        changes.push(`Property removed: ${prop}: ${value}`);
       }
     });
   });
-
-  // Animations & Typography
-  analyzeAnimations(addedAST, changes);
-  analyzeTypography(addedAST, changes);
-
+  
+  // Analyze layout systems, animations, typography
+  if (newAST) {
+    analyzeLayoutSystems(newAST, oldAST, changes);
+    analyzeAnimations(newAST, oldAST, changes);
+    analyzeTypography(newAST, oldAST, changes);
+  }
+  
   return changes;
 }
-
 
 /**
  * Extract all declarations from AST
  */
-function extractDeclarationsFromAST(ast) {
+function extractDeclarations(ast) {
   const props = {};
   
   ast.walkDecls(decl => {
@@ -397,13 +412,154 @@ function extractDeclarationsFromAST(ast) {
 }
 
 /**
+ * Normalize CSS values for accurate comparison
+ */
+function normalizeValue(value, prop) {
+  if (!value) return value;
+  
+  const val = value.toString().trim().toLowerCase();
+  
+  // Normalize hex colors: #fff → #ffffff
+  if (/^#([0-9a-f]{3})$/i.test(val)) {
+    const [, rgb] = val.match(/^#([0-9a-f]{3})$/i);
+    return `#${rgb[0]}${rgb[0]}${rgb[1]}${rgb[1]}${rgb[2]}${rgb[2]}`;
+  }
+  
+  // Normalize hex colors to lowercase
+  if (/^#[0-9a-f]{6}$/i.test(val)) {
+    return val.toLowerCase();
+  }
+  
+  // Normalize decimals
+  if (/^\d*\.\d+$/.test(val)) {
+    return parseFloat(val).toFixed(2);
+  }
+  
+  // Normalize zero values: 0px, 0em, 0% → 0
+  if (/^0(px|em|rem|%|vh|vw)?$/.test(val)) {
+    return '0';
+  }
+  
+  // Normalize RGB/RGBA spaces
+  if (val.startsWith('rgb')) {
+    return val.replace(/\s+/g, '');
+  }
+  
+  return val;
+}
+
+/**
+ * Handle display property changes with special formatting
+ */
+function handleDisplayChanges(newVals, oldVals, counts, ast, changes) {
+  // Simple 1-to-1 change
+  if (oldVals.length === 1 && newVals.length === 1 && oldVals[0] !== newVals[0]) {
+    if (newVals[0] === 'flex') {
+      changes.push(`Changed to Flexbox layout (was: ${oldVals[0]})`);
+      analyzeFlexboxProperties(ast, changes);
+    } else if (newVals[0] === 'grid') {
+      changes.push(`Changed to CSS Grid layout (was: ${oldVals[0]})`);
+      analyzeGridProperties(ast, changes);
+    } else {
+      changes.push(`Property changed: display from ${oldVals[0]} → ${newVals[0]}`);
+    }
+    return;
+  }
+  
+  // Additions
+  newVals.forEach(value => {
+    if (!oldVals.includes(value)) {
+      const count = counts[value];
+      
+      if (value === 'flex') {
+        changes.push('Implemented Flexbox layout');
+        analyzeFlexboxProperties(ast, changes);
+      } else if (value === 'grid') {
+        changes.push('Implemented CSS Grid layout');
+        analyzeGridProperties(ast, changes);
+      } else if (value === 'none') {
+        if (count > 1) {
+          changes.push(`⚠ Element hidden via display: none (${count} elements)`);
+        } else {
+          changes.push('⚠ Element hidden via display: none');
+        }
+      } else {
+        if (count > 1) {
+          changes.push(`Property added: display: ${value} (${count} elements)`);
+        } else {
+          changes.push(`Property added: display: ${value}`);
+        }
+      }
+    }
+  });
+  
+  // Removals
+  oldVals.forEach(value => {
+    if (!newVals.includes(value)) {
+      const count = counts[value];
+      if (count > 1) {
+        changes.push(`Property removed: display: ${value} (${count} elements)`);
+      } else {
+        changes.push(`Property removed: display: ${value}`);
+      }
+    }
+  });
+}
+
+/**
+ * Handle special properties (position, visibility, opacity, z-index)
+ */
+function handleSpecialProperty(prop, newVals, oldVals, newCounts, oldCounts, changes) {
+  // Simple 1-to-1 change
+  if (oldVals.length === 1 && newVals.length === 1 && oldVals[0] !== newVals[0]) {
+    changes.push(`Property changed: ${prop} from ${oldVals[0]} → ${newVals[0]}`);
+    return;
+  }
+  
+  // Additions
+  newVals.forEach(value => {
+    if (!oldVals.includes(value)) {
+      const count = newCounts[value];
+      
+      // Special messages for certain values
+      if (prop === 'visibility' && value === 'hidden') {
+        if (count > 1) {
+          changes.push(`⚠ Element hidden via visibility: hidden (${count} elements)`);
+        } else {
+          changes.push('⚠ Element hidden via visibility: hidden');
+        }
+      } else {
+        if (count > 1) {
+          changes.push(`Property added: ${prop}: ${value} (${count} elements)`);
+        } else {
+          changes.push(`Property added: ${prop}: ${value}`);
+        }
+      }
+    }
+  });
+  
+  // Removals
+  oldVals.forEach(value => {
+    if (!newVals.includes(value)) {
+      const count = oldCounts[value];
+      if (count > 1) {
+        changes.push(`Property removed: ${prop}: ${value} (${count} elements)`);
+      } else {
+        changes.push(`Property removed: ${prop}: ${value}`);
+      }
+    }
+  });
+}
+
+/**
  * Analyze Flexbox properties
  */
 function analyzeFlexboxProperties(ast, changes) {
   const flexProps = {};
   
   ast.walkDecls(decl => {
-    if (decl.prop.startsWith('flex-') || ['justify-content', 'align-items', 'align-content'].includes(decl.prop)) {
+    if (decl.prop.startsWith('flex-') || 
+        ['justify-content', 'align-items', 'align-content', 'gap'].includes(decl.prop)) {
       flexProps[decl.prop] = decl.value;
     }
   });
@@ -411,13 +567,14 @@ function analyzeFlexboxProperties(ast, changes) {
   if (flexProps['flex-direction'] === 'column') {
     changes.push('  └─ Column layout');
   }
-  
   if (flexProps['justify-content']) {
     changes.push(`  └─ Justify: ${flexProps['justify-content']}`);
   }
-  
   if (flexProps['align-items']) {
     changes.push(`  └─ Align: ${flexProps['align-items']}`);
+  }
+  if (flexProps['gap']) {
+    changes.push(`  └─ Gap: ${flexProps['gap']}`);
   }
 }
 
@@ -427,138 +584,205 @@ function analyzeFlexboxProperties(ast, changes) {
 function analyzeGridProperties(ast, changes) {
   ast.walkDecls(decl => {
     if (decl.prop === 'grid-template-columns') {
-      const columns = decl.value.split(/\s+/).length;
+      const columns = decl.value.split(/\s+/).filter(v => v && v !== '|').length;
       changes.push(`  └─ ${columns} column grid`);
     }
-    
     if (decl.prop === 'gap' || decl.prop === 'grid-gap') {
       changes.push(`  └─ With gap spacing: ${decl.value}`);
+    }
+    if (decl.prop === 'grid-template-rows') {
+      changes.push(`  └─ Row template: ${decl.value}`);
     }
   });
 }
 
 /**
- * Analyze animations and transitions
+ * Analyze layout systems
  */
-function analyzeAnimations(ast, changes) {
-  let animationCount = 0;
-  let transitionCount = 0;
-  let transformCount = 0;
+function analyzeLayoutSystems(newAST, oldAST, changes) {
+  // Already handled in display changes
+}
+
+/**
+ * Analyze animations
+ */
+function analyzeAnimations(newAST, oldAST, changes) {
+  const newAnimProps = extractAnimationProps(newAST);
+  const oldAnimProps = oldAST ? extractAnimationProps(oldAST) : {};
+  
+  const allProps = new Set([...Object.keys(newAnimProps), ...Object.keys(oldAnimProps)]);
+  
+  allProps.forEach(prop => {
+    const newVals = newAnimProps[prop] || [];
+    const oldVals = oldAnimProps[prop] || [];
+    
+    const newUnique = Array.from(new Set(newVals));
+    const oldUnique = Array.from(new Set(oldVals));
+    
+    // Simple 1-to-1 change
+    if (oldUnique.length === 1 && newUnique.length === 1 && oldUnique[0] !== newUnique[0]) {
+      changes.push(`Property changed: ${prop} from ${oldUnique[0]} → ${newUnique[0]}`);
+      return;
+    }
+    
+    const addedVals = newUnique.filter(v => !oldUnique.includes(v));
+    const removedVals = oldUnique.filter(v => !newUnique.includes(v));
+    
+    addedVals.forEach(value => {
+      const count = newVals.filter(v => v === value).length;
+      if (count > 1) {
+        changes.push(`Property added: ${prop}: ${value} (${count} elements)`);
+      } else {
+        changes.push(`Property added: ${prop}: ${value}`);
+      }
+    });
+    
+    removedVals.forEach(value => {
+      const count = oldVals.filter(v => v === value).length;
+      if (count > 1) {
+        changes.push(`Property removed: ${prop}: ${value} (${count} elements)`);
+      } else {
+        changes.push(`Property removed: ${prop}: ${value}`);
+      }
+    });
+  });
+}
+
+function extractAnimationProps(ast) {
+  const props = {};
   
   ast.walkDecls(decl => {
-    if (decl.prop.startsWith('animation')) {
-      animationCount++;
-    } else if (decl.prop === 'transition') {
-      transitionCount++;
-    } else if (decl.prop === 'transform') {
-      transformCount++;
+    if (decl.prop.startsWith('animation') || decl.prop === 'transition' || decl.prop === 'transform') {
+      if (!props[decl.prop]) {
+        props[decl.prop] = [];
+      }
+      props[decl.prop].push(decl.value);
     }
   });
   
-  if (animationCount > 0) {
-    changes.push(`Applied animation to ${animationCount} element${animationCount > 1 ? 's' : ''}`);
-  }
-  
-  if (transitionCount > 0) {
-    changes.push(`Added ${transitionCount} transition${transitionCount > 1 ? 's' : ''}`);
-  }
-  
-  if (transformCount > 0) {
-    changes.push(`Added ${transformCount} CSS transform${transformCount > 1 ? 's' : ''}`);
-  }
+  return props;
 }
 
 /**
  * Analyze typography
  */
-function analyzeTypography(ast, changes) {
-  const typographyProps = {};
+function analyzeTypography(newAST, oldAST, changes) {
+  const typographyProps = [
+    'font-family', 'font-size', 'font-weight', 'line-height',
+    'letter-spacing', 'text-align', 'text-transform', 'text-decoration'
+  ];
   
-  ast.walkDecls(decl => {
-    if (['font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-align', 'text-transform'].includes(decl.prop)) {
-      if (!typographyProps[decl.prop]) {
-        typographyProps[decl.prop] = [];
-      }
-      typographyProps[decl.prop].push(decl.value);
-    }
-  });
+  const newTypo = extractTypographyProps(newAST, typographyProps);
+  const oldTypo = oldAST ? extractTypographyProps(oldAST, typographyProps) : {};
   
-  if (typographyProps['font-family']) {
-    changes.push(`Changed font family: ${typographyProps['font-family'][0]}`);
-  }
-  
-  if (typographyProps['font-size']) {
-    changes.push(`Modified font sizes (${typographyProps['font-size'].length} instance${typographyProps['font-size'].length > 1 ? 's' : ''})`);
-  }
-  
-  if (typographyProps['font-weight']) {
-    const bold = typographyProps['font-weight'].some(w => w === 'bold' || parseInt(w) >= 600);
-    if (bold) {
-      changes.push('Added bold text styling');
-    }
-  }
-}
-
-/**
- * Analyze at-rules (media queries, keyframes, etc.)
- */
-function analyzeAtRules(addedAST, removedAST) {
-  const changes = [];
-  
-  const addedAtRules = extractAtRules(addedAST);
-  const removedAtRules = removedAST ? extractAtRules(removedAST) : { media: [], keyframes: [], import: [], fontFace: [], supports: [], container: [] };
-  
-  // Media queries
-  if (addedAtRules.media.length > removedAtRules.media.length) {
-    const diff = addedAtRules.media.length - removedAtRules.media.length;
-    changes.push(`Added ${diff} media quer${diff > 1 ? 'ies' : 'y'}`);
+  Object.keys(newTypo).forEach(prop => {
+    const newVals = newTypo[prop] || [];
+    const oldVals = oldTypo[prop] || [];
     
-    // Analyze breakpoints
-    const breakpoints = [];
-    addedAtRules.media.forEach(params => {
-      const widthMatch = params.match(/(?:max|min)-width:\s*(\d+(?:\.\d+)?)(px|em|rem)/);
-      if (widthMatch) {
-        breakpoints.push(`${widthMatch[1]}${widthMatch[2]}`);
+    const newUnique = Array.from(new Set(newVals));
+    const oldUnique = Array.from(new Set(oldVals));
+    
+    // Simple 1-to-1 change
+    if (oldUnique.length === 1 && newUnique.length === 1 && oldUnique[0] !== newUnique[0]) {
+      changes.push(`Property changed: ${prop} from ${oldUnique[0]} → ${newUnique[0]}`);
+      return;
+    }
+    
+    const addedVals = newUnique.filter(v => !oldUnique.includes(v));
+    const removedVals = oldUnique.filter(v => !newUnique.includes(v));
+    
+    addedVals.forEach(value => {
+      const count = newVals.filter(v => v === value).length;
+      if (count > 1) {
+        changes.push(`Property added: ${prop}: ${value} (${count} elements)`);
+      } else {
+        changes.push(`Property added: ${prop}: ${value}`);
       }
     });
     
-    if (breakpoints.length > 0) {
-      changes.push(`  └─ Breakpoints: ${[...new Set(breakpoints)].join(', ')}`);
+    removedVals.forEach(value => {
+      const count = oldVals.filter(v => v === value).length;
+      if (count > 1) {
+        changes.push(`Property removed: ${prop}: ${value} (${count} elements)`);
+      } else {
+        changes.push(`Property removed: ${prop}: ${value}`);
+      }
+    });
+  });
+}
+
+function extractTypographyProps(ast, props) {
+  const result = {};
+  
+  ast.walkDecls(decl => {
+    if (props.includes(decl.prop)) {
+      if (!result[decl.prop]) {
+        result[decl.prop] = [];
+      }
+      result[decl.prop].push(decl.value);
     }
-    
-    // Dark mode
-    if (addedAtRules.media.some(p => /prefers-color-scheme:\s*dark/.test(p))) {
+  });
+  
+  return result;
+}
+
+/**
+ * Compare at-rules (media queries, keyframes, etc.)
+ */
+function compareAtRules(oldAST, newAST) {
+  const changes = [];
+  
+  const oldAtRules = oldAST ? extractAtRules(oldAST) : { 
+    media: [], keyframes: [], import: [], fontFace: [], supports: [], container: [] 
+  };
+  const newAtRules = newAST ? extractAtRules(newAST) : { 
+    media: [], keyframes: [], import: [], fontFace: [], supports: [], container: [] 
+  };
+  
+  // Media queries
+  const addedMedia = newAtRules.media.filter(m => !oldAtRules.media.includes(m));
+  const removedMedia = oldAtRules.media.filter(m => !newAtRules.media.includes(m));
+  
+  addedMedia.forEach(params => {
+    changes.push(`Property added: @media ${params}`);
+    if (/prefers-color-scheme:\s*dark/.test(params)) {
       changes.push('✓ Added dark mode support');
     }
-  }
+  });
+  
+  removedMedia.forEach(params => {
+    changes.push(`Property removed: @media ${params}`);
+  });
   
   // Keyframes
-  if (addedAtRules.keyframes.length > 0) {
-    changes.push(`Added ${addedAtRules.keyframes.length} animation${addedAtRules.keyframes.length > 1 ? 's' : ''}: ${addedAtRules.keyframes.join(', ')}`);
-  }
+  const addedKeyframes = newAtRules.keyframes.filter(k => !oldAtRules.keyframes.includes(k));
+  const removedKeyframes = oldAtRules.keyframes.filter(k => !newAtRules.keyframes.includes(k));
+  
+  addedKeyframes.forEach(name => {
+    changes.push(`Property added: @keyframes ${name}`);
+  });
+  
+  removedKeyframes.forEach(name => {
+    changes.push(`Property removed: @keyframes ${name}`);
+  });
   
   // Font-face
-  if (addedAtRules.fontFace.length > 0) {
-    changes.push(`Added ${addedAtRules.fontFace.length} custom font${addedAtRules.fontFace.length > 1 ? 's' : ''} (@font-face)`);
+  if (newAtRules.fontFace.length > oldAtRules.fontFace.length) {
+    const diff = newAtRules.fontFace.length - oldAtRules.fontFace.length;
+    changes.push(`Property added: @font-face (${diff} custom font${diff > 1 ? 's' : ''})`);
   }
   
   // Imports
-  if (addedAtRules.import.length > 0) {
-    changes.push(`Added ${addedAtRules.import.length} @import statement${addedAtRules.import.length > 1 ? 's' : ''}`);
-    if (addedAtRules.import.length <= 3) {
-      addedAtRules.import.forEach(url => changes.push(`  └─ ${url}`));
-    }
-  }
+  const addedImports = newAtRules.import.filter(i => !oldAtRules.import.includes(i));
+  const removedImports = oldAtRules.import.filter(i => !newAtRules.import.includes(i));
   
-  // Container queries
-  if (addedAtRules.container.length > 0) {
-    changes.push('Added container query (modern CSS)');
-  }
+  addedImports.forEach(url => {
+    changes.push(`Property added: @import ${url}`);
+  });
   
-  // Supports queries
-  if (addedAtRules.supports.length > 0) {
-    changes.push(`Added ${addedAtRules.supports.length} @supports rule${addedAtRules.supports.length > 1 ? 's' : ''}`);
-  }
+  removedImports.forEach(url => {
+    changes.push(`Property removed: @import ${url}`);
+  });
   
   return changes;
 }
@@ -603,53 +827,105 @@ function extractAtRules(ast) {
 }
 
 /**
- * Analyze SCSS/SASS preprocessor features
+ * OPTIMIZATION 7: Fixed SCSS variable comparison to avoid double reporting
+ * Compare SCSS/SASS preprocessor features
  */
-function analyzePreprocessorFeatures(added, removed) {
+function comparePreprocessorFeatures(oldContent, newContent) {
   const changes = [];
   
-  // SCSS variables
-  const scssVars = (added.match(/\$[\w-]+:/g) || []);
-  if (scssVars.length > 0) {
-    const unique = [...new Set(scssVars.map(v => v.replace(/:$/, '')))];
-    if (unique.length <= 5) {
-      changes.push(`Added SCSS variables: ${unique.join(', ')}`);
-    } else {
-      changes.push(`Added ${unique.length} SCSS variables`);
+  // SCSS variables - Extract with values
+  const oldVars = extractSCSSVariables(oldContent);
+  const newVars = extractSCSSVariables(newContent);
+  
+  const allVarNames = new Set([...Object.keys(oldVars), ...Object.keys(newVars)]);
+  
+  allVarNames.forEach(varName => {
+    const oldValue = oldVars[varName];
+    const newValue = newVars[varName];
+    
+    if (!oldValue && newValue) {
+      // Variable added
+      changes.push(`Property added: SCSS variable ${varName}: ${newValue}`);
+    } else if (oldValue && !newValue) {
+      // Variable removed
+      changes.push(`Property removed: SCSS variable ${varName}`);
+    } else if (oldValue && newValue && oldValue !== newValue) {
+      // Variable value changed
+      changes.push(`Property changed: SCSS variable ${varName} from ${oldValue} → ${newValue}`);
     }
-  }
+    // If oldValue === newValue, no change - don't report anything
+  });
   
   // Mixins
-  const mixinDefs = (added.match(/@mixin\s+([\w-]+)/g) || []);
-  if (mixinDefs.length > 0) {
-    const names = mixinDefs.map(m => m.replace(/@mixin\s+/, ''));
-    changes.push(`Defined ${mixinDefs.length} mixin${mixinDefs.length > 1 ? 's' : ''}: ${names.join(', ')}`);
-  }
+  const oldMixins = extractMixins(oldContent);
+  const newMixins = extractMixins(newContent);
   
-  const mixinIncludes = (added.match(/@include\s+([\w-]+)/g) || []);
-  if (mixinIncludes.length > 0) {
-    changes.push(`Used ${mixinIncludes.length} mixin${mixinIncludes.length > 1 ? 's' : ''}`);
-  }
+  const addedMixins = newMixins.filter(m => !oldMixins.includes(m));
+  addedMixins.forEach(mixin => {
+    changes.push(`Defined mixin: ${mixin}`);
+  });
   
-  // Extend
-  if (/@extend/.test(added)) {
-    const extendCount = (added.match(/@extend/g) || []).length;
-    changes.push(`Used @extend ${extendCount} time${extendCount > 1 ? 's' : ''}`);
-  }
+  // Mixin includes
+  const oldIncludes = extractMixinIncludes(oldContent);
+  const newIncludes = extractMixinIncludes(newContent);
   
-  // Functions
-  const functionDefs = (added.match(/@function\s+([\w-]+)/g) || []);
-  if (functionDefs.length > 0) {
-    changes.push(`Defined ${functionDefs.length} SCSS function${functionDefs.length > 1 ? 's' : ''}`);
-  }
+  const addedIncludes = newIncludes.filter(m => !oldIncludes.includes(m));
+  addedIncludes.forEach(include => {
+    changes.push(`Used mixin: ${include}`);
+  });
   
-  // Nesting depth
-  const nestingDepth = detectNestingDepth(added);
-  if (nestingDepth > 3) {
-    changes.push(`⚠ Deep nesting detected (${nestingDepth} levels)`);
+  // OPTIMIZATION 4: Improved nesting depth warning
+  const newDepth = detectNestingDepth(newContent);
+  const oldDepth = detectNestingDepth(oldContent);
+  
+  // Warn if new depth is excessive (>4), even if old depth was also high
+  if (newDepth > 4) {
+    if (newDepth > oldDepth) {
+      changes.push(`⚠ Deep nesting detected (${newDepth} levels, increased from ${oldDepth})`);
+    } else if (oldDepth <= 4) {
+      // New deep nesting introduced
+      changes.push(`⚠ Deep nesting detected (${newDepth} levels)`);
+    }
+    // If both old and new are >4 and new <= old, don't warn (already had deep nesting)
   }
   
   return changes;
+}
+
+function extractSCSSVariables(content) {
+  const vars = {};
+  const regex = /\$([\w-]+):\s*([^;]+);/g;
+  let match;
+  
+  while ((match = regex.exec(content)) !== null) {
+    vars[`${match[1]}`] = match[2].trim();
+  }
+  
+  return vars;
+}
+
+function extractMixins(content) {
+  const mixins = [];
+  const regex = /@mixin\s+([\w-]+)/g;
+  let match;
+  
+  while ((match = regex.exec(content)) !== null) {
+    mixins.push(match[1]);
+  }
+  
+  return mixins;
+}
+
+function extractMixinIncludes(content) {
+  const includes = [];
+  const regex = /@include\s+([\w-]+)/g;
+  let match;
+  
+  while ((match = regex.exec(content)) !== null) {
+    includes.push(match[1]);
+  }
+  
+  return includes;
 }
 
 function detectNestingDepth(css) {
@@ -669,117 +945,83 @@ function detectNestingDepth(css) {
 }
 
 /**
- * REGEX FALLBACK PARSER
- * Used when PostCSS AST parsing fails
+ * OPTIMIZATION 5: Enhanced fallback with property extraction
+ * FALLBACK METHOD: Diff-aware lightweight parsing
+ * Used only when full-file AST parsing fails (rare)
  */
-function parseCSSWithRegex(diff, filepath) {
+function parseCSSWithDiffFallback(diffContent, filepath) {
   const changes = [];
-  const lines = diff.split('\n');
   
-  let addedLines = [];
-  let removedLines = [];
+  // Extract added lines from diff
+  const lines = diffContent.split('\n');
+  const addedLines = [];
   
   for (const line of lines) {
     if (line.startsWith('+') && !line.startsWith('+++')) {
-      addedLines.push(line.substring(1));
-    } else if (line.startsWith('-') && !line.startsWith('---')) {
-      removedLines.push(line.substring(1));
+      addedLines.push(line.substring(1).trim());
     }
   }
   
   const addedContent = addedLines.join('\n');
-  const removedContent = removedLines.join('\n');
   
-  // Selector changes (basic regex)
-  const selectorChanges = detectSelectorChangesRegex(addedContent, removedContent);
-  changes.push(...selectorChanges);
+  // Try to extract some basic property information
+  const propertyMatches = addedContent.match(/([\w-]+)\s*:\s*([^;{]+)/g);
   
-  // Property changes
-  const propertyChanges = detectPropertyChangesRegex(addedContent, removedContent);
-  changes.push(...propertyChanges);
-  
-  // Media queries
-  const responsiveChanges = detectResponsiveChangesRegex(addedContent, removedContent);
-  changes.push(...responsiveChanges);
-  
-  // Animations
-  const animationChanges = detectAnimationChangesRegex(addedContent, removedContent);
-  changes.push(...animationChanges);
-  
-  return changes.length > 0 ? changes : ['Style rules updated'];
-}
-
-function detectSelectorChangesRegex(added, removed) {
-  const changes = [];
-  const addedSelectors = extractSelectorsRegex(added);
-  const removedSelectors = extractSelectorsRegex(removed);
-  
-  const newSelectors = addedSelectors.filter(s => !removedSelectors.includes(s));
-  
-  if (newSelectors.length > 0) {
-    if (newSelectors.length <= 5) {
-      newSelectors.forEach(sel => changes.push(`Added selector: ${sel}`));
+  if (propertyMatches && propertyMatches.length > 0) {
+    // Extract unique properties
+    const properties = new Set();
+    
+    propertyMatches.forEach(match => {
+      const propMatch = match.match(/([\w-]+)\s*:/);
+      if (propMatch) {
+        const prop = propMatch[1].trim();
+        
+        // Skip common non-CSS properties
+        if (!prop.startsWith('@') && prop.length > 0) {
+          properties.add(prop);
+        }
+      }
+    });
+    
+    if (properties.size > 0) {
+      // Report properties found
+      if (properties.size <= 5) {
+        // If few properties, list them
+        Array.from(properties).forEach(prop => {
+          changes.push(`Property modified: ${prop}`);
+        });
+      } else {
+        // If many properties, give summary
+        changes.push(`Component visual changes detected (${properties.size} properties modified)`);
+      }
     } else {
-      changes.push(`Added ${newSelectors.length} selectors`);
+      changes.push('Component visual changes detected');
+    }
+  } else {
+    // No properties found, generic message
+    changes.push('Component visual changes detected');
+  }
+  
+  // Check for special cases
+  if (addedContent.includes('@media')) {
+    changes.push('Responsive design changes detected');
+  }
+  
+  if (addedContent.includes('@keyframes')) {
+    changes.push('Animation changes detected');
+  }
+  
+  if (addedContent.includes('display:') || addedContent.includes('display :')) {
+    if (addedContent.includes('flex')) {
+      changes.push('Possible Flexbox layout changes');
+    }
+    if (addedContent.includes('grid')) {
+      changes.push('Possible Grid layout changes');
     }
   }
   
-  return changes;
-}
-
-function extractSelectorsRegex(css) {
-  const selectors = [];
-  const regex = /([^{}]+)\s*\{/g;
-  let match;
-  
-  while ((match = regex.exec(css)) !== null) {
-    const selector = match[1].trim();
-    if (selector && !selector.startsWith('@')) {
-      selectors.push(selector);
-    }
-  }
-  
-  return selectors;
-}
-
-function detectPropertyChangesRegex(added, removed) {
-  const changes = [];
-  
-  if (/display:\s*flex/.test(added)) {
-    changes.push('Implemented Flexbox layout');
-  }
-  
-  if (/display:\s*grid/.test(added)) {
-    changes.push('Implemented CSS Grid layout');
-  }
-  
-  if (/display:\s*none/.test(added)) {
-    changes.push('⚠ Element hidden via display: none');
-  }
-  
-  return changes;
-}
-
-function detectResponsiveChangesRegex(added, removed) {
-  const changes = [];
-  
-  const mediaQueries = (added.match(/@media[^{]+/g) || []);
-  if (mediaQueries.length > 0) {
-    changes.push(`Added ${mediaQueries.length} media quer${mediaQueries.length > 1 ? 'ies' : 'y'}`);
-  }
-  
-  return changes;
-}
-
-function detectAnimationChangesRegex(added, removed) {
-  const changes = [];
-  
-  const keyframes = (added.match(/@keyframes\s+([\w-]+)/g) || []);
-  if (keyframes.length > 0) {
-    changes.push(`Added ${keyframes.length} animation${keyframes.length > 1 ? 's' : ''}`);
-  }
-  
-  return changes;
+  return changes.length > 0 ? changes : ['Component visual changes detected'];
 }
 
 module.exports = { parseCSS };
+
