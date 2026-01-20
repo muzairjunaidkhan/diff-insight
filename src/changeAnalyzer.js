@@ -117,27 +117,40 @@ async function analyzeChanges(diffs, options) {
       
     } else {
       // Use appropriate parser for other file types
-      switch (fileType) {
-        case 'html':
-          changes = parseHTML(diff.diff, diff.path);
-          parseMethod = 'regex';
-          break;
-          
-        case 'css':
-        case 'scss':
-          changes = parseCSS(diff.diff, diff.path);
-          parseMethod = 'regex';
-          break;
-          
-        case 'jquery':
-          changes = parseJQuery(diff.diff, diff.path);
-          parseMethod = 'regex';
-          break;
-          
-        default:
-          changes = parseGeneric(diff.diff);
-          parseMethod = 'generic';
+      try {
+        switch (fileType) {
+          case 'html':
+            changes = parseHTML(diff.diff, diff.path);
+            parseMethod = 'regex';
+            break;
+            
+          case 'css':
+          case 'scss':
+            // CSS parser is now async, so await it
+            changes = await parseCSS(diff.diff, diff.path);
+            parseMethod = 'postcss-ast';
+            break;
+            
+          case 'jquery':
+            changes = parseJQuery(diff.diff, diff.path);
+            parseMethod = 'regex';
+            break;
+            
+          default:
+            changes = parseGeneric(diff.diff);
+            parseMethod = 'generic';
+        }
+      } catch (parserError) {
+        console.warn(`[Parser] Failed for ${diff.path}: ${parserError.message}`);
+        changes = parseGeneric(diff.diff);
+        parseMethod = 'generic-fallback';
       }
+    }
+    
+    // Ensure changes is always an array
+    if (!Array.isArray(changes)) {
+      console.warn(`[Warning] Changes is not an array for ${diff.path}, converting...`);
+      changes = changes ? [String(changes)] : ['Code modified'];
     }
     
     // Calculate metrics
@@ -214,6 +227,12 @@ function parseGeneric(diff) {
  * Calculate complexity from change descriptions
  */
 function calculateComplexityFromChanges(changes) {
+  // Ensure changes is an array
+  if (!Array.isArray(changes)) {
+    console.warn('[Warning] calculateComplexityFromChanges received non-array:', changes);
+    return 'N/A';
+  }
+  
   let score = 0;
   const changeText = changes.join(' ').toLowerCase();
   
