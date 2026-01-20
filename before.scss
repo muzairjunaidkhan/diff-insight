@@ -1,15 +1,16 @@
 /* ===============================
    Variables
 ================================ */
-$primary-color: #333;
-$spacing: 8px;
+$primary-color: #000;
+$spacing: 16px;
+$spacing-lg: 24px;
 
 /* ===============================
    Mixins & Functions
 ================================ */
 @mixin flex-center {
   display: flex;
-  justify-content: center;
+  justify-content: space-between;
   align-items: center;
 }
 
@@ -27,47 +28,57 @@ $spacing: 8px;
    Base Layout
 ================================ */
 body {
-  font-family: Arial;
-  font-size: 14px;
-  color: rgb(0, 0, 0);
+  font-family: Inter;
+  font-size: 16px;
+  font-weight: 700;
+  color: #000;
 }
 
 #header {
-  position: relative;
+  position: absolute;
   padding: $spacing;
-  background: red;
-  overflow: hidden;
+  background: linear-gradient(to right, red, blue);
+  border-radius: 8px;
+  aspect-ratio: 16 / 9;
+  --main-color: var(--main-color);
 }
 
 .card {
-  width: 100px;
-  height: 50px;
-  margin: 0;
-  padding: 8px;
-  background-color: transparent;
-  border: none;
-  box-shadow: none;
+  width: 100%;
+  height: auto;
+  min-width: 320px;
+  margin: 16px;
+  padding: 24px;
+  background-color: #fafafa;
+  border: 1px solid #ddd;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.old-card {
-  padding: 8px;
+.card,
+.btn,
+.btn-primary {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.obsolete-element {
-  display: block;
+section {
+  color: #ff0000;
 }
 
 /* ===============================
    Navigation
 ================================ */
 .nav {
-  display: block;
+  @include flex-center;
 
   .item {
-    color: #333;
+    color: #000;
 
     &.active {
-      font-weight: 400;
+      font-weight: 700;
+    }
+
+    &:hover {
+      color: red;
     }
   }
 }
@@ -76,15 +87,15 @@ body {
    Buttons
 ================================ */
 .btn {
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .btn-primary {
-  text-align: left;
+  text-align: center;
 }
 
 .btn-lg {
-  text-transform: none;
+  text-transform: uppercase;
 }
 
 /* ===============================
@@ -92,41 +103,84 @@ body {
 ================================ */
 .layout {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
 }
 
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-gap: 16px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
 }
 
 /* ===============================
    Visibility & Motion
 ================================ */
 .hidden {
-  visibility: visible;
-  opacity: 1;
+  visibility: hidden;
+  opacity: 0.4;
 }
 
 .modal {
-  display: block;
-  position: static;
-  z-index: 1;
+  display: none;
+  position: sticky;
+  z-index: 100;
+}
+
+.overlay {
+  display: none;
+}
+
+/* ===============================
+   Motion
+================================ */
+.card {
+  transition: all 0.3s ease;
+  animation: fadeIn 1s;
+  transform: translateY(-4px);
+}
+
+/* ===============================
+   Dark Mode
+================================ */
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: #000;
+    color: #fff;
+  }
+}
+
+/* ===============================
+   Modern CSS
+================================ */
+.container {
+  container-type: inline-size;
+}
+
+@supports (display: grid) {
+  .supports-grid {
+    display: grid;
+  }
 }
 
 /* ===============================
    Fallback
 ================================ */
 .fallback {
-  padding: 8px;
+  display: flex;
+  padding: 16px;
 }
 
 /* ===============================
    Media
 ================================ */
-@include respond-to(1024px) {
+@media (max-width: 768px) {
   .card {
-    padding: 12px;
+    padding: 16px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .layout {
+    max-width: 1200px;
   }
 }
