@@ -1,0 +1,132 @@
+/* ===============================
+   Variables
+================================ */
+$primary-color: #333;
+$spacing: 8px;
+
+/* ===============================
+   Mixins & Functions
+================================ */
+@mixin flex-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+@mixin respond-to($breakpoint) {
+  @media (max-width: $breakpoint) {
+    @content;
+  }
+}
+
+@function rem($px) {
+  @return $px / 16 * 1rem;
+}
+
+/* ===============================
+   Base Layout
+================================ */
+body {
+  font-family: Arial;
+  font-size: 14px;
+  color: rgb(0, 0, 0);
+}
+
+#header {
+  position: relative;
+  padding: $spacing;
+  background: red;
+  overflow: hidden;
+}
+
+.card {
+  width: 100px;
+  height: 50px;
+  margin: 0;
+  padding: 8px;
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.old-card {
+  padding: 8px;
+}
+
+.obsolete-element {
+  display: block;
+}
+
+/* ===============================
+   Navigation
+================================ */
+.nav {
+  display: block;
+
+  .item {
+    color: #333;
+
+    &.active {
+      font-weight: 400;
+    }
+  }
+}
+
+/* ===============================
+   Buttons
+================================ */
+.btn {
+  font-size: 14px;
+}
+
+.btn-primary {
+  text-align: left;
+}
+
+.btn-lg {
+  text-transform: none;
+}
+
+/* ===============================
+   Layout Systems
+================================ */
+.layout {
+  display: flex;
+  flex-direction: row;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-gap: 16px;
+}
+
+/* ===============================
+   Visibility & Motion
+================================ */
+.hidden {
+  visibility: visible;
+  opacity: 1;
+}
+
+.modal {
+  display: block;
+  position: static;
+  z-index: 1;
+}
+
+/* ===============================
+   Fallback
+================================ */
+.fallback {
+  padding: 8px;
+}
+
+/* ===============================
+   Media
+================================ */
+@include respond-to(1024px) {
+  .card {
+    padding: 12px;
+  }
+}
