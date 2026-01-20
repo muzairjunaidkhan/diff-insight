@@ -1,13 +1,8 @@
-/* ===============================
-   Variables
-================================ */
+
 $primary-color: #000;
 $spacing: 16px;
 $spacing-lg: 24px;
 
-/* ===============================
-   Mixins & Functions
-================================ */
 @mixin flex-center {
   display: flex;
   justify-content: space-between;
@@ -24,9 +19,6 @@ $spacing-lg: 24px;
   @return $px / 16 * 1rem;
 }
 
-/* ===============================
-   Base Layout
-================================ */
 body {
   font-family: Inter;
   font-size: 16px;
@@ -64,9 +56,6 @@ section {
   color: #ff0000;
 }
 
-/* ===============================
-   Navigation
-================================ */
 .nav {
   @include flex-center;
 
@@ -83,9 +72,6 @@ section {
   }
 }
 
-/* ===============================
-   Buttons
-================================ */
 .btn {
   font-size: 16px;
 }
@@ -98,9 +84,6 @@ section {
   text-transform: uppercase;
 }
 
-/* ===============================
-   Layout Systems
-================================ */
 .layout {
   display: flex;
   flex-direction: column;
@@ -112,9 +95,6 @@ section {
   gap: 24px;
 }
 
-/* ===============================
-   Visibility & Motion
-================================ */
 .hidden {
   visibility: hidden;
   opacity: 0.4;
@@ -130,18 +110,12 @@ section {
   display: none;
 }
 
-/* ===============================
-   Motion
-================================ */
 .card {
   transition: all 0.3s ease;
   animation: fadeIn 1s;
   transform: translateY(-4px);
 }
 
-/* ===============================
-   Dark Mode
-================================ */
 @media (prefers-color-scheme: dark) {
   body {
     background-color: #000;
@@ -149,9 +123,6 @@ section {
   }
 }
 
-/* ===============================
-   Modern CSS
-================================ */
 .container {
   container-type: inline-size;
 }
@@ -162,17 +133,11 @@ section {
   }
 }
 
-/* ===============================
-   Fallback
-================================ */
 .fallback {
   display: flex;
   padding: 16px;
 }
 
-/* ===============================
-   Media
-================================ */
 @media (max-width: 768px) {
   .card {
     padding: 16px;
